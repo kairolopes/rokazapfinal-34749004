@@ -2,7 +2,7 @@ import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import fetch from "node-fetch";
 import { getSuperlogicaConfig, SUPERLOGICA_BASE_URL } from "./superlogicaConfig";
-import OpenAI from "openai";
+// OpenAI removido — IA agora via Edge Function ai-chat (Gemini)
 import { GoogleAuth } from "google-auth-library";
 import { SessionsClient, AgentsClient } from "@google-cloud/dialogflow-cx";
 import crypto from "crypto";
