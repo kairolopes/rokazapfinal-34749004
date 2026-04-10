@@ -20,6 +20,30 @@ async function fetchWithTimeout(url: string, init: any, ms: number) {
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
+// ── Contact cache (in-memory, 5-min TTL per cold start) ─────────────
+const CONTACT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const contactCache = new Map<string, { data: any; ts: number }>();
+
+function getCachedContact(phone: string, tenantId: string): any | null {
+  const key = `${tenantId}|${phone}`;
+  const entry = contactCache.get(key);
+  if (entry && Date.now() - entry.ts < CONTACT_CACHE_TTL) return entry.data;
+  contactCache.delete(key);
+  return null;
+}
+
+function setCachedContact(phone: string, tenantId: string, data: any): void {
+  const key = `${tenantId}|${phone}`;
+  contactCache.set(key, { data, ts: Date.now() });
+  // Evict old entries if cache grows too large
+  if (contactCache.size > 5000) {
+    const now = Date.now();
+    for (const [k, v] of contactCache) {
+      if (now - v.ts > CONTACT_CACHE_TTL) contactCache.delete(k);
+    }
+  }
+}
+
 // ── Name similarity helpers ──────────────────────────────────────────
 
 function normalize(s: string): string {
