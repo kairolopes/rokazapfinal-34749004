@@ -31,7 +31,7 @@ interface Schedule {
 
 interface ChatbotConfig {
   enabled: boolean;
-  openaiApiKey: string;
+  systemPrompt: string;
   systemPrompt: string;
   absenceMessage: string;
   replyMode: 'always' | 'outside_hours';
@@ -73,7 +73,7 @@ const defaultSchedule: Schedule = {
 
 const defaultConfig: ChatbotConfig = {
   enabled: false,
-  openaiApiKey: '',
+  systemPrompt: 'Você é o assistente virtual do Síndico X. Responda de forma educada e objetiva. Se não souber a resposta, informe que um atendente entrará em contato no próximo horário de funcionamento.',
   systemPrompt: 'Você é o assistente virtual do Síndico X. Responda de forma educada e objetiva. Se não souber a resposta, informe que um atendente entrará em contato no próximo horário de funcionamento.',
   absenceMessage: '👋 Olá! No momento estamos fora do horário de atendimento. O Síndico X estará disponível no próximo dia útil. Se precisar, deixe sua mensagem que responderemos assim que possível!',
   replyMode: 'always',
@@ -226,17 +226,9 @@ export default function ChatbotConfigCard() {
           <p className="text-xs text-muted-foreground">Escolha se a IA responde sempre ou apenas fora do horário configurado abaixo</p>
         </div>
 
-        {/* API Key */}
-        <div className="space-y-2">
-          <Label className="text-sm">Chave API do OpenAI</Label>
-          <Input
-            type="password"
-            value={config.openaiApiKey}
-            onChange={(e) => setConfig(prev => ({ ...prev, openaiApiKey: e.target.value }))}
-            placeholder="sk-..."
-            className="font-mono text-xs"
-          />
-          <p className="text-xs text-muted-foreground">Sua chave da API do ChatGPT. Encontre em platform.openai.com</p>
+        {/* IA powered by Gemini — sem necessidade de API key */}
+        <div className="rounded-md bg-muted/50 p-3">
+          <p className="text-xs text-muted-foreground">🤖 IA powered by Google Gemini — nenhuma chave de API necessária</p>
         </div>
 
         {/* System Prompt */}
