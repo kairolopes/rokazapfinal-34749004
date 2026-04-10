@@ -32,7 +32,6 @@ interface Schedule {
 interface ChatbotConfig {
   enabled: boolean;
   systemPrompt: string;
-  systemPrompt: string;
   absenceMessage: string;
   replyMode: 'always' | 'outside_hours';
   schedule: Schedule;
