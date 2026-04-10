@@ -556,346 +556,7 @@ export const zapiWebhook = functions.runWith({ timeoutSeconds: 300, memory: "1GB
       conversationId = newConv.id;
     }
 
-    // ── Auto-cadastro inteligente (somente mensagens recebidas) ──────────────────────────────────
-    if (!fromMe) {
-      const senderName = body.senderName || body.chatName || phone;
-      const senderPhoto = body.photo || "";
-
-      // Helper to add tenantId to contact data
-      const withTenant = (data: any) => tenantId ? { ...data, tenantId } : data;
-
-      let contactQuery = db.collection("contacts").where("phone", "==", phone);
-      if (tenantId) contactQuery = contactQuery.where("tenantId", "==", tenantId);
-      const contactSnap = await contactQuery.limit(1).get();
-
-      if (contactSnap.empty) {
-        // Contato NÃO existe pelo telefone — buscar na Superlógica
-        let superMatch: SuperlogicaMatch | null = null;
-        try {
-          superMatch = await findInSuperlogica(phone, tenantId);
-        } catch (err) {
-          console.error("zapiWebhook - erro findInSuperlogica:", err);
-        }
-
-        if (superMatch && superMatch.superlogicaName) {
-          const similarity = nameSimilarity(senderName, superMatch.superlogicaName);
-          console.log("zapiWebhook - nameSimilarity:", similarity.toFixed(2),
-            "whatsapp:", JSON.stringify(senderName),
-            "superlogica:", JSON.stringify(superMatch.superlogicaName));
-
-          if (similarity >= 0.4) {
-            // Nomes semelhantes → buscar contato existente no Firestore pelo nome da Superlógica e atualizar
-            let existingByNameQuery = db.collection("contacts")
-              .where("condominium", "==", superMatch.condoName)
-              .where("block", "==", superMatch.block)
-              .where("unit", "==", superMatch.unit);
-            if (tenantId) existingByNameQuery = existingByNameQuery.where("tenantId", "==", tenantId);
-            const existingByName = await existingByNameQuery.limit(1).get();
-
-            if (!existingByName.empty) {
-              const updateFields: any = {
-                phone,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              };
-              if (senderPhoto) updateFields.avatar = senderPhoto;
-              try {
-                const cfg = await getSuperlogicaConfig(tenantId);
-                const headers = { "Content-Type": "application/json", app_token: cfg.appToken, access_token: cfg.accessToken };
-                let condoId = "";
-                try {
-                  const resp = await fetch(`${SUPERLOGICA_BASE_URL}/condominios/get?id=-1&somenteCondominiosAtivos=1&apenasColunasPrincipais=1`, { method: "GET", headers });
-                  if (resp.ok) {
-                    let condos: any[] = await resp.json();
-                    if (cfg?.condominioIds && cfg.condominioIds.length > 0) {
-                      condos = condos.filter((c: any) => cfg.condominioIds!.includes(String(c.id_condominio_cond)));
-                    }
-                    if (superMatch.condoName) {
-                      const normName = (s: string) => (s || "").toLowerCase().trim();
-                      const found = condos.find((c: any) => normName(c.st_fantasia_cond || c.st_nome_cond) === normName(superMatch.condoName));
-                      if (found) condoId = String(found.id_condominio_cond);
-                    }
-                    if (!condoId && condos[0]) condoId = String(condos[0].id_condominio_cond);
-                  }
-                } catch {}
-                let principalCpf = "";
-                if (condoId) {
-                  const norm = (s: string) => String(s || "").trim().toLowerCase();
-                  const normCompact = (s: string) => norm(s).replace(/bloco/gi, "").replace(/[^a-z0-9]/g, "");
-                  const stripZeros = (s: string) => s.replace(/^0+/, "") || "0";
-                  const eqFlex = (a: string, b: string) => {
-                    if (!a || !b) return false;
-                    if (a === b) return true;
-                    const ac = normCompact(a);
-                    const bc = normCompact(b);
-                    if (ac === bc) return true;
-                    if (stripZeros(ac) === stripZeros(bc)) return true;
-                    return false;
-                  };
-                  let page = 1;
-                  while (!principalCpf) {
-                    const url = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=${condoId}&exibirDadosDosContatos=1&pagina=${page}&itensPorPagina=50`;
-                    const resp = await fetch(url, { method: "GET", headers });
-                    if (!resp.ok) break;
-                    const arr: any[] = await resp.json();
-                    if (!Array.isArray(arr) || arr.length === 0) break;
-                    for (const u of arr) {
-                      const b = String(u.st_bloco_uni || "");
-                      const un = String(u.st_unidade_uni || "");
-                      if (eqFlex(b, superMatch.block) && (eqFlex(un, superMatch.unit) || eqFlex(String(u.id_unidade_uni || ""), superMatch.unit))) {
-                        const pickCpf = (...vals: any[]): string => {
-                          for (const v of vals) {
-                            const only = String(v || "").replace(/\D/g, "");
-                            if (only.length >= 11) return only.slice(-11);
-                          }
-                          return "";
-                        };
-                        principalCpf = pickCpf(u.st_cpf_uni, u.st_cpfcnpj_uni, u.st_cnpj_uni, u.st_documento_uni);
-                        if (!principalCpf) {
-                          const contatos = Array.isArray(u.contatos) ? u.contatos : Array.isArray(u.st_contatos) ? u.st_contatos : [];
-                          for (const ct of contatos) {
-                            principalCpf = pickCpf(ct.st_cpf_con, ct.st_cpfcnpj_con, ct.st_documento_con, ct.st_cnpj_con);
-                            if (principalCpf) break;
-                          }
-                        }
-                        break;
-                      }
-                    }
-                    if (!principalCpf && arr.length < 50) break;
-                    page++;
-                    if (page > 10) break;
-                  }
-                }
-                const currentCpf = String(existingByName.docs[0].data()?.cpf || "").replace(/\D/g, "");
-                if (!currentCpf && principalCpf) updateFields.cpf = principalCpf;
-              } catch {}
-              await existingByName.docs[0].ref.update(updateFields);
-              console.log("zapiWebhook - contato existente atualizado com phone:", phone);
-            } else {
-              // Não encontrou no Firestore, cria com dados da Superlógica
-              let principalCpf = "";
-              try {
-                const cfg = await getSuperlogicaConfig(tenantId);
-                const headers = { "Content-Type": "application/json", app_token: cfg.appToken, access_token: cfg.accessToken };
-                let condoId = "";
-                try {
-                  const resp = await fetch(`${SUPERLOGICA_BASE_URL}/condominios/get?id=-1&somenteCondominiosAtivos=1&apenasColunasPrincipais=1`, { method: "GET", headers });
-                  if (resp.ok) {
-                    let condos: any[] = await resp.json();
-                    if (cfg?.condominioIds && cfg.condominioIds.length > 0) {
-                      condos = condos.filter((c: any) => cfg.condominioIds!.includes(String(c.id_condominio_cond)));
-                    }
-                    if (superMatch.condoName) {
-                      const normName = (s: string) => (s || "").toLowerCase().trim();
-                      const found = condos.find((c: any) => normName(c.st_fantasia_cond || c.st_nome_cond) === normName(superMatch.condoName));
-                      if (found) condoId = String(found.id_condominio_cond);
-                    }
-                    if (!condoId && condos[0]) condoId = String(condos[0].id_condominio_cond);
-                  }
-                } catch {}
-                if (condoId) {
-                  const norm = (s: string) => String(s || "").trim().toLowerCase();
-                  const normCompact = (s: string) => norm(s).replace(/bloco/gi, "").replace(/[^a-z0-9]/g, "");
-                  const stripZeros = (s: string) => s.replace(/^0+/, "") || "0";
-                  const eqFlex = (a: string, b: string) => {
-                    if (!a || !b) return false;
-                    if (a === b) return true;
-                    const ac = normCompact(a);
-                    const bc = normCompact(b);
-                    if (ac === bc) return true;
-                    if (stripZeros(ac) === stripZeros(bc)) return true;
-                    return false;
-                  };
-                  let page = 1;
-                  while (!principalCpf) {
-                    const url = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=${condoId}&exibirDadosDosContatos=1&pagina=${page}&itensPorPagina=50`;
-                    const resp = await fetch(url, { method: "GET", headers });
-                    if (!resp.ok) break;
-                    const arr: any[] = await resp.json();
-                    if (!Array.isArray(arr) || arr.length === 0) break;
-                    for (const u of arr) {
-                      const b = String(u.st_bloco_uni || "");
-                      const un = String(u.st_unidade_uni || "");
-                      if (eqFlex(b, superMatch.block) && (eqFlex(un, superMatch.unit) || eqFlex(String(u.id_unidade_uni || ""), superMatch.unit))) {
-                        const pickCpf = (...vals: any[]): string => {
-                          for (const v of vals) {
-                            const only = String(v || "").replace(/\D/g, "");
-                            if (only.length >= 11) return only.slice(-11);
-                          }
-                          return "";
-                        };
-                        principalCpf = pickCpf(u.st_cpf_uni, u.st_cpfcnpj_uni, u.st_cnpj_uni, u.st_documento_uni);
-                        if (!principalCpf) {
-                          const contatos = Array.isArray(u.contatos) ? u.contatos : Array.isArray(u.st_contatos) ? u.st_contatos : [];
-                          for (const ct of contatos) {
-                            principalCpf = pickCpf(ct.st_cpf_con, ct.st_cpfcnpj_con, ct.st_documento_con, ct.st_cnpj_con);
-                            if (principalCpf) break;
-                          }
-                        }
-                        break;
-                      }
-                    }
-                    if (!principalCpf && arr.length < 50) break;
-                    page++;
-                    if (page > 10) break;
-                  }
-                }
-              } catch {}
-              await db.collection("contacts").add(withTenant({
-                phone, name: senderName, avatar: senderPhoto,
-                email: "", cpf: principalCpf || "", condominium: superMatch.condoName,
-                block: superMatch.block, unit: superMatch.unit,
-                address: "", customNotes: "", tags: [],
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              }));
-              console.log("zapiWebhook - contato criado com dados Superlógica (nome similar):", phone);
-            }
-          } else {
-            // Nomes diferentes → criar novo contato com dados de moradia copiados
-            let principalCpf = "";
-            try {
-              const cfg = await getSuperlogicaConfig(tenantId);
-              const headers = { "Content-Type": "application/json", app_token: cfg.appToken, access_token: cfg.accessToken };
-              let condoId = "";
-              try {
-                const resp = await fetch(`${SUPERLOGICA_BASE_URL}/condominios/get?id=-1&somenteCondominiosAtivos=1&apenasColunasPrincipais=1`, { method: "GET", headers });
-                if (resp.ok) {
-                  let condos: any[] = await resp.json();
-                  if (cfg?.condominioIds && cfg.condominioIds.length > 0) {
-                    condos = condos.filter((c: any) => cfg.condominioIds!.includes(String(c.id_condominio_cond)));
-                  }
-                  if (superMatch.condoName) {
-                    const normName = (s: string) => (s || "").toLowerCase().trim();
-                    const found = condos.find((c: any) => normName(c.st_fantasia_cond || c.st_nome_cond) === normName(superMatch.condoName));
-                    if (found) condoId = String(found.id_condominio_cond);
-                  }
-                  if (!condoId && condos[0]) condoId = String(condos[0].id_condominio_cond);
-                }
-              } catch {}
-              if (condoId) {
-                const norm = (s: string) => String(s || "").trim().toLowerCase();
-                const normCompact = (s: string) => norm(s).replace(/bloco/gi, "").replace(/[^a-z0-9]/g, "");
-                const stripZeros = (s: string) => s.replace(/^0+/, "") || "0";
-                const eqFlex = (a: string, b: string) => {
-                  if (!a || !b) return false;
-                  if (a === b) return true;
-                  const ac = normCompact(a);
-                  const bc = normCompact(b);
-                  if (ac === bc) return true;
-                  if (stripZeros(ac) === stripZeros(bc)) return true;
-                  return false;
-                };
-                let page = 1;
-                while (!principalCpf) {
-                  const url = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=${condoId}&exibirDadosDosContatos=1&pagina=${page}&itensPorPagina=50`;
-                  const resp = await fetch(url, { method: "GET", headers });
-                  if (!resp.ok) break;
-                  const arr: any[] = await resp.json();
-                  if (!Array.isArray(arr) || arr.length === 0) break;
-                  for (const u of arr) {
-                    const b = String(u.st_bloco_uni || "");
-                    const un = String(u.st_unidade_uni || "");
-                    if (eqFlex(b, superMatch.block) && (eqFlex(un, superMatch.unit) || eqFlex(String(u.id_unidade_uni || ""), superMatch.unit))) {
-                      const pickCpf = (...vals: any[]): string => {
-                        for (const v of vals) {
-                          const only = String(v || "").replace(/\D/g, "");
-                          if (only.length >= 11) return only.slice(-11);
-                        }
-                        return "";
-                      };
-                      principalCpf = pickCpf(u.st_cpf_uni, u.st_cpfcnpj_uni, u.st_cnpj_uni, u.st_documento_uni);
-                      if (!principalCpf) {
-                        const contatos = Array.isArray(u.contatos) ? u.contatos : Array.isArray(u.st_contatos) ? u.st_contatos : [];
-                        for (const ct of contatos) {
-                          principalCpf = pickCpf(ct.st_cpf_con, ct.st_cpfcnpj_con, ct.st_documento_con, ct.st_cnpj_con);
-                          if (principalCpf) break;
-                        }
-                      }
-                      break;
-                    }
-                  }
-                  if (!principalCpf && arr.length < 50) break;
-                  page++;
-                  if (page > 10) break;
-                }
-              }
-            } catch {}
-            await db.collection("contacts").add(withTenant({
-              phone, name: senderName, avatar: senderPhoto,
-              email: "", cpf: principalCpf || "", condominium: superMatch.condoName,
-              block: superMatch.block, unit: superMatch.unit,
-              address: "", customNotes: "", tags: [],
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            }));
-            console.log("zapiWebhook - novo contato criado (nome diferente) com moradia copiada:", phone,
-              "whatsapp:", senderName, "superlogica:", superMatch.superlogicaName);
-          }
-        } else {
-          // Sem match na Superlógica → criar contato vazio
-          await db.collection("contacts").add(withTenant({
-            phone, name: senderName, avatar: senderPhoto,
-            email: "", cpf: "",
-            condominium: superMatch?.condoName || "", block: superMatch?.block || "",
-            unit: superMatch?.unit || "",
-            address: "", customNotes: "", tags: [],
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          }));
-          console.log("zapiWebhook - contato auto-cadastrado (sem match Superlógica):", phone);
-        }
-      } else {
-        // Contato já existe — atualizar foto se disponível
-        const existingContact = contactSnap.docs[0].data();
-        const existingName = existingContact.name || "";
-
-        if (senderPhoto) {
-          await contactSnap.docs[0].ref.update({
-            avatar: senderPhoto,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-
-        // Se o nome do WhatsApp é diferente do cadastrado, atualizar o nome na conversa
-        const similarity = nameSimilarity(senderName, existingName);
-        if (similarity < 0.4 && senderName && senderName !== phone) {
-          await db.collection("conversations").doc(conversationId).update({
-            contactName: senderName,
-          });
-
-          // Criar contato separado se não existir com mesmo nome+telefone
-          let existingByNamePhoneQuery = db.collection("contacts")
-            .where("phone", "==", phone)
-            .where("name", "==", senderName);
-          if (tenantId) existingByNamePhoneQuery = existingByNamePhoneQuery.where("tenantId", "==", tenantId);
-          const existingByNamePhone = await existingByNamePhoneQuery.limit(1).get();
-
-          if (existingByNamePhone.empty) {
-            await db.collection("contacts").add(withTenant({
-              phone,
-              name: senderName,
-              avatar: senderPhoto || "",
-              email: "",
-              cpf: "",
-              condominium: existingContact.condominium || "",
-              block: existingContact.block || "",
-              unit: existingContact.unit || "",
-              address: "",
-              customNotes: "",
-              tags: [],
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            }));
-            console.log("zapiWebhook - contato separado criado:", senderName, "phone:", phone);
-          }
-
-          console.log("zapiWebhook - nome diferente detectado. Conversa atualizada para:", senderName,
-            "(cadastro mantém:", existingName, ", similarity:", similarity.toFixed(2), ")");
-        }
-      }
-    }
-
-    // Detectar tipo e gravar mensagem
+    // Detectar tipo e gravar mensagem (FASE 1 — síncrona, rápida)
     const { type, mediaUrl, mediaMimeType, mediaFileName, linkUrl, linkTitle, linkDescription, linkImage } = detectMessageType(body);
     const messageBody = getMessageBody(body);
 
@@ -943,16 +604,375 @@ export const zapiWebhook = functions.runWith({ timeoutSeconds: 300, memory: "1GB
 
     console.log("zapiWebhook - conversationId:", conversationId, "isNew:", isNewConversation, "fromMe:", fromMe);
 
-    // ── Auto-resposta ChatGPT fora do horário (somente mensagens recebidas) ──────────────────────────
-    if (!fromMe) {
-      try {
-        await handleChatbotAutoReply(ownerId, conversationId, phone, messageBody, instanceId, tenantId);
-      } catch (botErr) {
-        console.error("zapiWebhook - erro na auto-resposta:", botErr);
-      }
-    }
-
+    // ── FASE 1 CONCLUÍDA — responder 200 OK imediatamente ──────────────────────────
     res.status(200).send("OK");
+
+    // ── FASE 2 — background: auto-cadastro + IA (fire and forget) ──────────────────
+    if (!fromMe) {
+      const backgroundWork = async () => {
+        const senderName = body.senderName || body.chatName || phone;
+        const senderPhoto = body.photo || "";
+
+        // Helper to add tenantId to contact data
+        const withTenant = (data: any) => tenantId ? { ...data, tenantId } : data;
+
+        // Check cache first
+        const cached = getCachedContact(phone, tenantId);
+        if (cached === null) {
+          let contactQuery = db.collection("contacts").where("phone", "==", phone);
+          if (tenantId) contactQuery = contactQuery.where("tenantId", "==", tenantId);
+          const contactSnap = await contactQuery.limit(1).get();
+
+          if (contactSnap.empty) {
+            // Contato NÃO existe pelo telefone — buscar na Superlógica
+            let superMatch: SuperlogicaMatch | null = null;
+            try {
+              superMatch = await findInSuperlogica(phone, tenantId);
+            } catch (err) {
+              console.error("zapiWebhook - erro findInSuperlogica:", err);
+            }
+
+            if (superMatch && superMatch.superlogicaName) {
+              const similarity = nameSimilarity(senderName, superMatch.superlogicaName);
+              console.log("zapiWebhook - nameSimilarity:", similarity.toFixed(2),
+                "whatsapp:", JSON.stringify(senderName),
+                "superlogica:", JSON.stringify(superMatch.superlogicaName));
+
+              if (similarity >= 0.4) {
+                // Nomes semelhantes → buscar contato existente no Firestore pelo nome da Superlógica e atualizar
+                let existingByNameQuery = db.collection("contacts")
+                  .where("condominium", "==", superMatch.condoName)
+                  .where("block", "==", superMatch.block)
+                  .where("unit", "==", superMatch.unit);
+                if (tenantId) existingByNameQuery = existingByNameQuery.where("tenantId", "==", tenantId);
+                const existingByName = await existingByNameQuery.limit(1).get();
+
+                if (!existingByName.empty) {
+                  const updateFields: any = {
+                    phone,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  };
+                  if (senderPhoto) updateFields.avatar = senderPhoto;
+                  try {
+                    const cfg = await getSuperlogicaConfig(tenantId);
+                    const headers = { "Content-Type": "application/json", app_token: cfg.appToken, access_token: cfg.accessToken };
+                    let condoId = "";
+                    try {
+                      const resp = await fetch(`${SUPERLOGICA_BASE_URL}/condominios/get?id=-1&somenteCondominiosAtivos=1&apenasColunasPrincipais=1`, { method: "GET", headers });
+                      if (resp.ok) {
+                        let condos: any[] = await resp.json();
+                        if (cfg?.condominioIds && cfg.condominioIds.length > 0) {
+                          condos = condos.filter((c: any) => cfg.condominioIds!.includes(String(c.id_condominio_cond)));
+                        }
+                        if (superMatch.condoName) {
+                          const normName = (s: string) => (s || "").toLowerCase().trim();
+                          const found = condos.find((c: any) => normName(c.st_fantasia_cond || c.st_nome_cond) === normName(superMatch.condoName));
+                          if (found) condoId = String(found.id_condominio_cond);
+                        }
+                        if (!condoId && condos[0]) condoId = String(condos[0].id_condominio_cond);
+                      }
+                    } catch {}
+                    let principalCpf = "";
+                    if (condoId) {
+                      const norm = (s: string) => String(s || "").trim().toLowerCase();
+                      const normCompact = (s: string) => norm(s).replace(/bloco/gi, "").replace(/[^a-z0-9]/g, "");
+                      const stripZeros = (s: string) => s.replace(/^0+/, "") || "0";
+                      const eqFlex = (a: string, b: string) => {
+                        if (!a || !b) return false;
+                        if (a === b) return true;
+                        const ac = normCompact(a);
+                        const bc = normCompact(b);
+                        if (ac === bc) return true;
+                        if (stripZeros(ac) === stripZeros(bc)) return true;
+                        return false;
+                      };
+                      let page = 1;
+                      while (!principalCpf) {
+                        const url = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=${condoId}&exibirDadosDosContatos=1&pagina=${page}&itensPorPagina=50`;
+                        const resp = await fetch(url, { method: "GET", headers });
+                        if (!resp.ok) break;
+                        const arr: any[] = await resp.json();
+                        if (!Array.isArray(arr) || arr.length === 0) break;
+                        for (const u of arr) {
+                          const b = String(u.st_bloco_uni || "");
+                          const un = String(u.st_unidade_uni || "");
+                          if (eqFlex(b, superMatch.block) && (eqFlex(un, superMatch.unit) || eqFlex(String(u.id_unidade_uni || ""), superMatch.unit))) {
+                            const pickCpf = (...vals: any[]): string => {
+                              for (const v of vals) {
+                                const only = String(v || "").replace(/\D/g, "");
+                                if (only.length >= 11) return only.slice(-11);
+                              }
+                              return "";
+                            };
+                            principalCpf = pickCpf(u.st_cpf_uni, u.st_cpfcnpj_uni, u.st_cnpj_uni, u.st_documento_uni);
+                            if (!principalCpf) {
+                              const contatos = Array.isArray(u.contatos) ? u.contatos : Array.isArray(u.st_contatos) ? u.st_contatos : [];
+                              for (const ct of contatos) {
+                                principalCpf = pickCpf(ct.st_cpf_con, ct.st_cpfcnpj_con, ct.st_documento_con, ct.st_cnpj_con);
+                                if (principalCpf) break;
+                              }
+                            }
+                            break;
+                          }
+                        }
+                        if (!principalCpf && arr.length < 50) break;
+                        page++;
+                        if (page > 10) break;
+                      }
+                    }
+                    const currentCpf = String(existingByName.docs[0].data()?.cpf || "").replace(/\D/g, "");
+                    if (!currentCpf && principalCpf) updateFields.cpf = principalCpf;
+                  } catch {}
+                  await existingByName.docs[0].ref.update(updateFields);
+                  setCachedContact(phone, tenantId, existingByName.docs[0].data());
+                  console.log("zapiWebhook - contato existente atualizado com phone:", phone);
+                } else {
+                  // Não encontrou no Firestore, cria com dados da Superlógica
+                  let principalCpf = "";
+                  try {
+                    const cfg = await getSuperlogicaConfig(tenantId);
+                    const headers = { "Content-Type": "application/json", app_token: cfg.appToken, access_token: cfg.accessToken };
+                    let condoId = "";
+                    try {
+                      const resp = await fetch(`${SUPERLOGICA_BASE_URL}/condominios/get?id=-1&somenteCondominiosAtivos=1&apenasColunasPrincipais=1`, { method: "GET", headers });
+                      if (resp.ok) {
+                        let condos: any[] = await resp.json();
+                        if (cfg?.condominioIds && cfg.condominioIds.length > 0) {
+                          condos = condos.filter((c: any) => cfg.condominioIds!.includes(String(c.id_condominio_cond)));
+                        }
+                        if (superMatch.condoName) {
+                          const normName = (s: string) => (s || "").toLowerCase().trim();
+                          const found = condos.find((c: any) => normName(c.st_fantasia_cond || c.st_nome_cond) === normName(superMatch.condoName));
+                          if (found) condoId = String(found.id_condominio_cond);
+                        }
+                        if (!condoId && condos[0]) condoId = String(condos[0].id_condominio_cond);
+                      }
+                    } catch {}
+                    if (condoId) {
+                      const norm = (s: string) => String(s || "").trim().toLowerCase();
+                      const normCompact = (s: string) => norm(s).replace(/bloco/gi, "").replace(/[^a-z0-9]/g, "");
+                      const stripZeros = (s: string) => s.replace(/^0+/, "") || "0";
+                      const eqFlex = (a: string, b: string) => {
+                        if (!a || !b) return false;
+                        if (a === b) return true;
+                        const ac = normCompact(a);
+                        const bc = normCompact(b);
+                        if (ac === bc) return true;
+                        if (stripZeros(ac) === stripZeros(bc)) return true;
+                        return false;
+                      };
+                      let page = 1;
+                      while (!principalCpf) {
+                        const url = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=${condoId}&exibirDadosDosContatos=1&pagina=${page}&itensPorPagina=50`;
+                        const resp = await fetch(url, { method: "GET", headers });
+                        if (!resp.ok) break;
+                        const arr: any[] = await resp.json();
+                        if (!Array.isArray(arr) || arr.length === 0) break;
+                        for (const u of arr) {
+                          const b = String(u.st_bloco_uni || "");
+                          const un = String(u.st_unidade_uni || "");
+                          if (eqFlex(b, superMatch.block) && (eqFlex(un, superMatch.unit) || eqFlex(String(u.id_unidade_uni || ""), superMatch.unit))) {
+                            const pickCpf = (...vals: any[]): string => {
+                              for (const v of vals) {
+                                const only = String(v || "").replace(/\D/g, "");
+                                if (only.length >= 11) return only.slice(-11);
+                              }
+                              return "";
+                            };
+                            principalCpf = pickCpf(u.st_cpf_uni, u.st_cpfcnpj_uni, u.st_cnpj_uni, u.st_documento_uni);
+                            if (!principalCpf) {
+                              const contatos = Array.isArray(u.contatos) ? u.contatos : Array.isArray(u.st_contatos) ? u.st_contatos : [];
+                              for (const ct of contatos) {
+                                principalCpf = pickCpf(ct.st_cpf_con, ct.st_cpfcnpj_con, ct.st_documento_con, ct.st_cnpj_con);
+                                if (principalCpf) break;
+                              }
+                            }
+                            break;
+                          }
+                        }
+                        if (!principalCpf && arr.length < 50) break;
+                        page++;
+                        if (page > 10) break;
+                      }
+                    }
+                  } catch {}
+                  const newContactData = withTenant({
+                    phone, name: senderName, avatar: senderPhoto,
+                    email: "", cpf: principalCpf || "", condominium: superMatch.condoName,
+                    block: superMatch.block, unit: superMatch.unit,
+                    address: "", customNotes: "", tags: [],
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  });
+                  await db.collection("contacts").add(newContactData);
+                  setCachedContact(phone, tenantId, newContactData);
+                  console.log("zapiWebhook - contato criado com dados Superlógica (nome similar):", phone);
+                }
+              } else {
+                // Nomes diferentes → criar novo contato com dados de moradia copiados
+                let principalCpf = "";
+                try {
+                  const cfg = await getSuperlogicaConfig(tenantId);
+                  const headers = { "Content-Type": "application/json", app_token: cfg.appToken, access_token: cfg.accessToken };
+                  let condoId = "";
+                  try {
+                    const resp = await fetch(`${SUPERLOGICA_BASE_URL}/condominios/get?id=-1&somenteCondominiosAtivos=1&apenasColunasPrincipais=1`, { method: "GET", headers });
+                    if (resp.ok) {
+                      let condos: any[] = await resp.json();
+                      if (cfg?.condominioIds && cfg.condominioIds.length > 0) {
+                        condos = condos.filter((c: any) => cfg.condominioIds!.includes(String(c.id_condominio_cond)));
+                      }
+                      if (superMatch.condoName) {
+                        const normName = (s: string) => (s || "").toLowerCase().trim();
+                        const found = condos.find((c: any) => normName(c.st_fantasia_cond || c.st_nome_cond) === normName(superMatch.condoName));
+                        if (found) condoId = String(found.id_condominio_cond);
+                      }
+                      if (!condoId && condos[0]) condoId = String(condos[0].id_condominio_cond);
+                    }
+                  } catch {}
+                  if (condoId) {
+                    const norm = (s: string) => String(s || "").trim().toLowerCase();
+                    const normCompact = (s: string) => norm(s).replace(/bloco/gi, "").replace(/[^a-z0-9]/g, "");
+                    const stripZeros = (s: string) => s.replace(/^0+/, "") || "0";
+                    const eqFlex = (a: string, b: string) => {
+                      if (!a || !b) return false;
+                      if (a === b) return true;
+                      const ac = normCompact(a);
+                      const bc = normCompact(b);
+                      if (ac === bc) return true;
+                      if (stripZeros(ac) === stripZeros(bc)) return true;
+                      return false;
+                    };
+                    let page = 1;
+                    while (!principalCpf) {
+                      const url = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=${condoId}&exibirDadosDosContatos=1&pagina=${page}&itensPorPagina=50`;
+                      const resp = await fetch(url, { method: "GET", headers });
+                      if (!resp.ok) break;
+                      const arr: any[] = await resp.json();
+                      if (!Array.isArray(arr) || arr.length === 0) break;
+                      for (const u of arr) {
+                        const b = String(u.st_bloco_uni || "");
+                        const un = String(u.st_unidade_uni || "");
+                        if (eqFlex(b, superMatch.block) && (eqFlex(un, superMatch.unit) || eqFlex(String(u.id_unidade_uni || ""), superMatch.unit))) {
+                          const pickCpf = (...vals: any[]): string => {
+                            for (const v of vals) {
+                              const only = String(v || "").replace(/\D/g, "");
+                              if (only.length >= 11) return only.slice(-11);
+                            }
+                            return "";
+                          };
+                          principalCpf = pickCpf(u.st_cpf_uni, u.st_cpfcnpj_uni, u.st_cnpj_uni, u.st_documento_uni);
+                          if (!principalCpf) {
+                            const contatos = Array.isArray(u.contatos) ? u.contatos : Array.isArray(u.st_contatos) ? u.st_contatos : [];
+                            for (const ct of contatos) {
+                              principalCpf = pickCpf(ct.st_cpf_con, ct.st_cpfcnpj_con, ct.st_documento_con, ct.st_cnpj_con);
+                              if (principalCpf) break;
+                            }
+                          }
+                          break;
+                        }
+                      }
+                      if (!principalCpf && arr.length < 50) break;
+                      page++;
+                      if (page > 10) break;
+                    }
+                  }
+                } catch {}
+                const newContactData = withTenant({
+                  phone, name: senderName, avatar: senderPhoto,
+                  email: "", cpf: principalCpf || "", condominium: superMatch.condoName,
+                  block: superMatch.block, unit: superMatch.unit,
+                  address: "", customNotes: "", tags: [],
+                  createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                });
+                await db.collection("contacts").add(newContactData);
+                setCachedContact(phone, tenantId, newContactData);
+                console.log("zapiWebhook - novo contato criado (nome diferente) com moradia copiada:", phone,
+                  "whatsapp:", senderName, "superlogica:", superMatch.superlogicaName);
+              }
+            } else {
+              // Sem match na Superlógica → criar contato vazio
+              const newContactData = withTenant({
+                phone, name: senderName, avatar: senderPhoto,
+                email: "", cpf: "",
+                condominium: superMatch?.condoName || "", block: superMatch?.block || "",
+                unit: superMatch?.unit || "",
+                address: "", customNotes: "", tags: [],
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              });
+              await db.collection("contacts").add(newContactData);
+              setCachedContact(phone, tenantId, newContactData);
+              console.log("zapiWebhook - contato auto-cadastrado (sem match Superlógica):", phone);
+            }
+          } else {
+            // Contato já existe — atualizar foto se disponível e cachear
+            const existingContact = contactSnap.docs[0].data();
+            setCachedContact(phone, tenantId, existingContact);
+            const existingName = existingContact.name || "";
+
+            if (senderPhoto) {
+              await contactSnap.docs[0].ref.update({
+                avatar: senderPhoto,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              });
+            }
+
+            // Se o nome do WhatsApp é diferente do cadastrado, atualizar o nome na conversa
+            const similarity = nameSimilarity(senderName, existingName);
+            if (similarity < 0.4 && senderName && senderName !== phone) {
+              await db.collection("conversations").doc(conversationId).update({
+                contactName: senderName,
+              });
+
+              // Criar contato separado se não existir com mesmo nome+telefone
+              let existingByNamePhoneQuery = db.collection("contacts")
+                .where("phone", "==", phone)
+                .where("name", "==", senderName);
+              if (tenantId) existingByNamePhoneQuery = existingByNamePhoneQuery.where("tenantId", "==", tenantId);
+              const existingByNamePhone = await existingByNamePhoneQuery.limit(1).get();
+
+              if (existingByNamePhone.empty) {
+                await db.collection("contacts").add(withTenant({
+                  phone,
+                  name: senderName,
+                  avatar: senderPhoto || "",
+                  email: "",
+                  cpf: "",
+                  condominium: existingContact.condominium || "",
+                  block: existingContact.block || "",
+                  unit: existingContact.unit || "",
+                  address: "",
+                  customNotes: "",
+                  tags: [],
+                  createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }));
+                console.log("zapiWebhook - contato separado criado:", senderName, "phone:", phone);
+              }
+
+              console.log("zapiWebhook - nome diferente detectado. Conversa atualizada para:", senderName,
+                "(cadastro mantém:", existingName, ", similarity:", similarity.toFixed(2), ")");
+            }
+          }
+        } else {
+          console.log("zapiWebhook - contato encontrado no cache, pulando auto-cadastro");
+        }
+
+        // Auto-resposta ChatGPT
+        try {
+          await handleChatbotAutoReply(ownerId, conversationId, phone, messageBody, instanceId, tenantId);
+        } catch (botErr) {
+          console.error("zapiWebhook - erro na auto-resposta:", botErr);
+        }
+      };
+
+      // Fire and forget — a Cloud Function continua rodando até o timeout (300s)
+      backgroundWork().catch((err) => {
+        console.error("zapiWebhook - erro no background work:", err);
+      });
+    }
   } catch (error) {
     console.error("Erro no webhook:", error);
     res.status(500).send("Internal Error");
