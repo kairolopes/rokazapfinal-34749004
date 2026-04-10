@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.httpBoletoSearch = exports.askCondoDoc = exports.indexTenantPdf = exports.setupAmoCondominioConfig = exports.listUnidades = exports.cleanInternalIds = exports.generateBoletoLink = exports.searchByCpf = exports.migratePhoneFormat = exports.syncSuperlogicaContacts = exports.listCondominios = exports.enrichContacts = exports.seedContacts = exports.createUser = exports.blockContact = exports.zapiPresenceWebhook = exports.deleteChat = exports.sendContacts = exports.sendContact = exports.forwardMessage = exports.sendLocation = exports.sendOptionList = exports.sendReaction = exports.fetchOgMetadata = exports.sendLink = exports.sendDocument = exports.sendVideo = exports.sendAudio = exports.sendGif = exports.sendSticker = exports.sendImage = exports.respondCaptcha = exports.confirmRegistrationCode = exports.requestRegistrationCode = exports.checkRegistrationAvailable = exports.zapiStatusWebhook = exports.zapiWebhook = exports.testConnection = exports.sendMessage = void 0;
+exports.setupZapiConfig = exports.httpBoletoSearch = exports.askCondoDoc = exports.indexTenantPdf = exports.setupAmoCondominioConfig = exports.listUnidades = exports.cleanInternalIds = exports.generateBoletoLink = exports.searchByCpf = exports.migratePhoneFormat = exports.syncSuperlogicaContacts = exports.listCondominios = exports.enrichContacts = exports.seedContacts = exports.createUser = exports.blockContact = exports.zapiPresenceWebhook = exports.deleteChat = exports.sendContacts = exports.sendContact = exports.forwardMessage = exports.sendLocation = exports.sendOptionList = exports.sendReaction = exports.fetchOgMetadata = exports.sendLink = exports.sendDocument = exports.sendVideo = exports.sendAudio = exports.sendGif = exports.sendSticker = exports.sendImage = exports.respondCaptcha = exports.confirmRegistrationCode = exports.requestRegistrationCode = exports.checkRegistrationAvailable = exports.zapiStatusWebhook = exports.zapiWebhook = exports.testConnection = exports.sendMessage = void 0;
 var sendMessage_1 = require("./sendMessage");
 Object.defineProperty(exports, "sendMessage", { enumerable: true, get: function () { return sendMessage_1.sendMessage; } });
 var sendMessage_2 = require("./sendMessage");
@@ -78,4 +78,6 @@ Object.defineProperty(exports, "indexTenantPdf", { enumerable: true, get: functi
 Object.defineProperty(exports, "askCondoDoc", { enumerable: true, get: function () { return pdfIngest_1.askCondoDoc; } });
 var httpBoletoSearch_1 = require("./httpBoletoSearch");
 Object.defineProperty(exports, "httpBoletoSearch", { enumerable: true, get: function () { return httpBoletoSearch_1.httpBoletoSearch; } });
+var setupZapiConfig_1 = require("./setupZapiConfig");
+Object.defineProperty(exports, "setupZapiConfig", { enumerable: true, get: function () { return setupZapiConfig_1.setupZapiConfig; } });
 //# sourceMappingURL=index.js.map
