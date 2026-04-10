@@ -56,7 +56,13 @@ Deno.serve(async (req) => {
     let cleaned = raw.trim();
     if (!cleaned.startsWith("{")) cleaned = "{" + cleaned;
     if (!cleaned.endsWith("}")) cleaned = cleaned + "}";
-    cleaned = cleaned.replace(/\\n/g, "\n");
+    // Fix escaped newlines in private_key before parsing
+    cleaned = cleaned.replace(/\\\\n/g, "\\n");
+    // Remove actual control characters that break JSON.parse
+    cleaned = cleaned.replace(/[\x00-\x1f\x7f]/g, (ch) => {
+      if (ch === "\n" || ch === "\r" || ch === "\t") return ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : "\\t";
+      return "";
+    });
     const sa = JSON.parse(cleaned);
     const projectId = sa.project_id;
 
