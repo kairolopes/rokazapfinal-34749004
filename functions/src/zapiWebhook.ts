@@ -2405,12 +2405,8 @@ async function handleChatbotAutoReply(
     }
   }
 
-  // 5. Provedores de IA
-  const HARDCODED_OPENAI_KEYS: Record<string, string> = {
-    "AyGEjmRvU1bQiKQruiiE": "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",
-  };
-  const resolvedApiKey = config.openaiApiKey || HARDCODED_OPENAI_KEYS[tenantId] || "";
-  // 5a. Provider Dialogflow CX (Google)
+  // 5. Provedores de IA (Gemini via Edge Function ai-chat)
+  // 5a. Provider Dialogflow CX (Google) — mantido como fallback legado
   const provider = (config as any).provider || "openai";
   if (!replyText && provider === "dialogflow") {
     try {
