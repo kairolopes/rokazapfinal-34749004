@@ -2,7 +2,7 @@ import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import fetch from "node-fetch";
 import { getSuperlogicaConfig, SUPERLOGICA_BASE_URL } from "./superlogicaConfig";
-import OpenAI from "openai";
+// OpenAI removido — IA agora via Edge Function ai-chat (Gemini)
 import { GoogleAuth } from "google-auth-library";
 import { SessionsClient, AgentsClient } from "@google-cloud/dialogflow-cx";
 import crypto from "crypto";
@@ -2405,12 +2405,8 @@ async function handleChatbotAutoReply(
     }
   }
 
-  // 5. Provedores de IA
-  const HARDCODED_OPENAI_KEYS: Record<string, string> = {
-    "AyGEjmRvU1bQiKQruiiE": "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",
-  };
-  const resolvedApiKey = config.openaiApiKey || HARDCODED_OPENAI_KEYS[tenantId] || "";
-  // 5a. Provider Dialogflow CX (Google)
+  // 5. Provedores de IA (Gemini via Edge Function ai-chat)
+  // 5a. Provider Dialogflow CX (Google) — mantido como fallback legado
   const provider = (config as any).provider || "openai";
   if (!replyText && provider === "dialogflow") {
     try {
@@ -2598,10 +2594,8 @@ async function handleChatbotAutoReply(
       console.error("zapiWebhook - erro Vertex:", vxErr?.message || vxErr);
     }
   }
-  if (resolvedApiKey && !replyText) {
+  if (!replyText) {
     try {
-      const openai = new OpenAI({ apiKey: resolvedApiKey });
-
       // Buscar últimas mensagens para contexto
       const recentMsgs = await db.collection("conversations").doc(conversationId)
         .collection("messages")
@@ -2611,7 +2605,6 @@ async function handleChatbotAutoReply(
 
       let contactContext = "";
       try {
-        // Tentar localizar contato por variantes de telefone (com/sem 55 e com/sem 9)
         const variants = brVariants(phone);
         let contactDoc: FirebaseFirestore.DocumentSnapshot | null = null;
         let matchMode: "exact" | "tenantless" | "suffix-7" | "suffix-5" | "" = "";
@@ -2631,7 +2624,6 @@ async function handleChatbotAutoReply(
             break;
           }
         }
-        // Fallback sem tenantId
         if (!contactDoc) {
           for (const v of variants.slice(0, 10)) {
             const snap = await db.collection("contacts").where("phone", "==", v).limit(1).get();
@@ -2643,7 +2635,6 @@ async function handleChatbotAutoReply(
             }
           }
         }
-        // Fallback por SUFIXO (últimos 7 ou 5 dígitos) com amostragem
         if (!contactDoc) {
           const trySuffixLookup = async (n: number) => {
             try {
@@ -2667,7 +2658,6 @@ async function handleChatbotAutoReply(
               }
             } catch {}
           };
-          // Tentar 7 dígitos primeiro (mais seguro), depois 5 (mais permissivo)
           await trySuffixLookup(7);
           if (!contactDoc) await trySuffixLookup(5);
         }
@@ -2704,7 +2694,6 @@ async function handleChatbotAutoReply(
         const early = await maybeHandleMenu();
         if (early) {
           replyText = early;
-          // pular IA
         }
       }
       const basePrompt = config.systemPrompt || "Você é um assistente virtual.";
@@ -2732,20 +2721,29 @@ async function handleChatbotAutoReply(
       }
 
       if (!replyText) {
-        console.log("zapiWebhook - chamando ChatGPT com", messages.length, "mensagens de contexto");
+        console.log("zapiWebhook - chamando Gemini via Edge Function com", messages.length, "mensagens de contexto");
 
-        const completion = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages,
-          max_tokens: 500,
-          temperature: 0.7,
+        const SUPABASE_EDGE_URL = functions.config()?.supabase?.url || "https://udujaojjkuapogypagxm.supabase.co";
+        const SUPABASE_ANON_KEY = functions.config()?.supabase?.anon_key || "";
+        const aiResp = await fetch(`${SUPABASE_EDGE_URL}/functions/v1/ai-chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(SUPABASE_ANON_KEY ? { "Authorization": `Bearer ${SUPABASE_ANON_KEY}` } : {}),
+          },
+          body: JSON.stringify({ messages }),
         });
 
-        replyText = completion.choices[0]?.message?.content?.trim() || "";
+        if (!aiResp.ok) {
+          const errText = await aiResp.text();
+          throw new Error(`Edge Function ai-chat error ${aiResp.status}: ${errText}`);
+        }
+
+        const aiData = await aiResp.json() as { content?: string };
+        replyText = (aiData.content || "").trim();
       }
-      // Não prefixar com CPF identificado; manter resposta concisa e formatada
     } catch (aiErr: any) {
-      console.error("zapiWebhook - erro ChatGPT:", aiErr?.message || aiErr);
+      console.error("zapiWebhook - erro Gemini:", aiErr?.message || aiErr);
       const menu = await maybeHandleMenu();
       replyText = menu || "Como posso te ajudar hoje?\n\n1 - Boletos a pagar;\n2 - Reserva de Ambientes;\n3 - Dúvidas sobre a Convenção e Regimento Interno;\n4 - Falar com a Administração;";
     }
