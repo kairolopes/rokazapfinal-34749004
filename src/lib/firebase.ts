@@ -4,12 +4,12 @@ import { initializeFirestore, getFirestore, memoryLocalCache, Firestore } from '
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBXrP5X9rxmg9Sz77N5McQNtH5K4Sn_i_0",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "rokazap.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "rokazap",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "rokazap.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "1088612807685",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:1088612807685:web:f85e3254092c4b399f186c",
 };
 
 export function isFirebaseConfigured(): boolean {
