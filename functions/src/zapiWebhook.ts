@@ -1375,6 +1375,113 @@ async function handleChatbotAutoReply(
     }
   } catch {}
 
+  // ── Identification flow for Campos Altos ──────────────────────────────
+  const IDENT_TENANT = "AyGEjmRvU1bQiKQruiiE";
+  if (tenantId === IDENT_TENANT) {
+    const identStatus = convData?.identStatus ?? 2;
+    const identPendingConfirm = convData?.identPendingConfirm ?? false;
+
+    if (identStatus === 2) {
+      if (identPendingConfirm) {
+        // Awaiting "sim" / "não" confirmation
+        const yesPattern = /^(sim|s|yes|y|isso|confirmo|correto|exato)\b/i;
+        const noPattern = /^(n[aã]o|no|n|errado|incorreto)\b/i;
+        if (yesPattern.test(incomingMessage.trim())) {
+          await db.collection("conversations").doc(conversationId).update({
+            identStatus: 1,
+            identPendingConfirm: false,
+          });
+          const firstName = (convData?.identName || "").split(/\s+/)[0] || "";
+          const identUnit = convData?.identUnitId || "—";
+          const identBlk = convData?.identBlock || "—";
+          replyText =
+            `Olá, *${firstName}*, sua conta está vinculada ao apartamento ${identUnit}, bloco ${identBlk}, do *CONDOMÍNIO CAMPOS ALTOS*!\n\n` +
+            `Como posso te ajudar hoje?\n\n` +
+            `1 - Boletos a pagar;\n` +
+            `2 - Reserva de Ambientes;\n` +
+            `3 - Dúvidas sobre a Convenção e Regimento Interno;\n` +
+            `4 - Falar com a Administração;`;
+        } else if (noPattern.test(incomingMessage.trim())) {
+          await db.collection("conversations").doc(conversationId).update({
+            identPendingConfirm: false,
+            identName: admin.firestore.FieldValue.delete(),
+            identUnitId: admin.firestore.FieldValue.delete(),
+            identBlock: admin.firestore.FieldValue.delete(),
+          });
+          replyText = "Não consegui identificar seu cadastro. Por favor, entre em contato com a administração para se cadastrar.";
+        } else {
+          replyText = "Por favor, responda *sim* ou *não* para confirmar sua identificação.";
+        }
+      } else {
+        // Search in Superlógica by last 5 digits of phone
+        const last5 = phone.replace(/\D/g, "").slice(-5);
+        if (!last5) {
+          replyText = "Não consegui identificar seu cadastro. Entre em contato com a administração para se cadastrar.";
+        } else {
+          try {
+            const cfg = await getSuperlogicaConfig(tenantId);
+            const slHeaders = {
+              "Content-Type": "application/json",
+              app_token: cfg.appToken,
+              access_token: cfg.accessToken,
+            };
+            let foundMatch: { name: string; unitId: string; block: string } | null = null;
+            for (let pg = 1; pg <= 5 && !foundMatch; pg++) {
+              const slUrl = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=47&exibirGruposDasUnidades=1&itensPorPagina=50&pagina=${pg}&exibirDadosDosContatos=1`;
+              const slResp = await fetch(slUrl, { method: "GET", headers: slHeaders });
+              if (!slResp.ok) break;
+              const slUnits: any[] = await slResp.json();
+              if (!Array.isArray(slUnits) || slUnits.length === 0) break;
+              for (const slUnit of slUnits) {
+                const phoneFields: string[] = [];
+                if (slUnit.celular_proprietario) phoneFields.push(String(slUnit.celular_proprietario));
+                if (slUnit.telefone_proprietario) phoneFields.push(String(slUnit.telefone_proprietario));
+                const contatos = Array.isArray(slUnit.contatos) ? slUnit.contatos : [];
+                for (const ct of contatos) {
+                  for (const f of ["st_celular_con", "st_telefone_con", "st_fone_con", "st_fonecomercial_con", "st_fone2_con", "st_celular2_con"]) {
+                    if (ct[f]) phoneFields.push(String(ct[f]));
+                  }
+                }
+                const matched = phoneFields.some((f) => {
+                  const digs = f.replace(/\D/g, "");
+                  return digs.length >= 5 && digs.slice(-5) === last5;
+                });
+                if (matched) {
+                  foundMatch = {
+                    name: contatos.length > 0 ? (contatos[0].st_nome_con || "") : "",
+                    unitId: String(slUnit.id_unidade_uni || ""),
+                    block: String(slUnit.st_bloco_uni || ""),
+                  };
+                  break;
+                }
+              }
+              if (slUnits.length < 50) break;
+            }
+            if (foundMatch) {
+              await db.collection("conversations").doc(conversationId).update({
+                identPendingConfirm: true,
+                identName: foundMatch.name,
+                identUnitId: foundMatch.unitId,
+                identBlock: foundMatch.block,
+              });
+              replyText =
+                `Olá! Sou o *Síndico X* do *Condomínio Campos Altos*.\n\n` +
+                `Seu nome é *${foundMatch.name || "morador"}*? Você está vinculado ao *Bloco ${foundMatch.block}*, *Apartamento ${foundMatch.unitId}*?\n\n` +
+                `Responda *sim* ou *não*.`;
+            } else {
+              replyText = "Não consegui identificar seu cadastro. Por favor, entre em contato com a administração para se cadastrar.";
+            }
+          } catch (identErr) {
+            console.error("zapiWebhook - erro na identificação Superlógica:", identErr);
+            replyText = "Ocorreu um erro ao verificar seu cadastro. Tente novamente em instantes.";
+          }
+        }
+      }
+      // identStatus=2: skip all other logic, go straight to sending
+    }
+    // identStatus=1: normal flow continues below
+  }
+
   const tryFindContact = async (): Promise<{ doc: FirebaseFirestore.DocumentSnapshot | null, data: any | null }> => {
     // Check cache first
     const cached = getCachedContact(phone, tenantId);
@@ -2375,23 +2482,32 @@ async function handleChatbotAutoReply(
       let condoPart = "";
       let unitPart = "";
       let blockPart = "";
-      try {
-        const variants = brVariants(phone);
-        for (const v of variants.slice(0, 10)) {
-          let q: FirebaseFirestore.Query = db.collection("contacts").where("phone", "==", v);
-          if (tenantId) q = q.where("tenantId", "==", tenantId);
-          const snap = await q.limit(1).get();
-          if (!snap.empty) {
-            const d = snap.docs[0].data() || {};
-            const firstName = String(d.name || "").trim().split(/\s+/)[0] || "";
-            if (firstName) namePart = `, *${firstName}*`;
-            condoPart = String(d.condominium || "");
-            blockPart = String(d.block || "");
-            unitPart = String(d.unit || "");
-            break;
+      // For Campos Altos identified users, use stored ident data
+      if (tenantId === IDENT_TENANT && convData?.identStatus === 1) {
+        const firstName = (convData?.identName || "").split(/\s+/)[0] || "";
+        if (firstName) namePart = `, *${firstName}*`;
+        condoPart = "CONDOMÍNIO CAMPOS ALTOS";
+        blockPart = convData?.identBlock || "—";
+        unitPart = convData?.identUnitId || "—";
+      } else {
+        try {
+          const variants = brVariants(phone);
+          for (const v of variants.slice(0, 10)) {
+            let q: FirebaseFirestore.Query = db.collection("contacts").where("phone", "==", v);
+            if (tenantId) q = q.where("tenantId", "==", tenantId);
+            const snap = await q.limit(1).get();
+            if (!snap.empty) {
+              const d = snap.docs[0].data() || {};
+              const firstName = String(d.name || "").trim().split(/\s+/)[0] || "";
+              if (firstName) namePart = `, *${firstName}*`;
+              condoPart = String(d.condominium || "");
+              blockPart = String(d.block || "");
+              unitPart = String(d.unit || "");
+              break;
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
       const condoBold = condoPart ? `*${condoPart.toUpperCase()}*` : "*seu condomínio*";
       const unitLabel = unitPart ? `${unitPart}` : "—";
       const blockLabel = blockPart ? `${blockPart}` : "—";
