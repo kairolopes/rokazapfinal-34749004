@@ -29,7 +29,7 @@ export default function MessageBubble({ message, contactAvatar, contactPhone, co
     (typeof anyMsg.msg === 'string' ? (anyMsg.msg as string) : '') ||
     (() => {
       const conv = conversations?.find((c) => c.id === message.conversationId);
-      return typeof conv?.lastMessageBody === 'string' ? conv!.lastMessageBody : '';
+      return typeof conv?.lastMessage?.body === 'string' ? conv!.lastMessage!.body : '';
     })();
 
   function renderStatusIcon() {
