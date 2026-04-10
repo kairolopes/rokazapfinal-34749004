@@ -2482,23 +2482,32 @@ async function handleChatbotAutoReply(
       let condoPart = "";
       let unitPart = "";
       let blockPart = "";
-      try {
-        const variants = brVariants(phone);
-        for (const v of variants.slice(0, 10)) {
-          let q: FirebaseFirestore.Query = db.collection("contacts").where("phone", "==", v);
-          if (tenantId) q = q.where("tenantId", "==", tenantId);
-          const snap = await q.limit(1).get();
-          if (!snap.empty) {
-            const d = snap.docs[0].data() || {};
-            const firstName = String(d.name || "").trim().split(/\s+/)[0] || "";
-            if (firstName) namePart = `, *${firstName}*`;
-            condoPart = String(d.condominium || "");
-            blockPart = String(d.block || "");
-            unitPart = String(d.unit || "");
-            break;
+      // For Campos Altos identified users, use stored ident data
+      if (tenantId === IDENT_TENANT && convData?.identStatus === 1) {
+        const firstName = (convData?.identName || "").split(/\s+/)[0] || "";
+        if (firstName) namePart = `, *${firstName}*`;
+        condoPart = "CONDOMÍNIO CAMPOS ALTOS";
+        blockPart = convData?.identBlock || "—";
+        unitPart = convData?.identUnitId || "—";
+      } else {
+        try {
+          const variants = brVariants(phone);
+          for (const v of variants.slice(0, 10)) {
+            let q: FirebaseFirestore.Query = db.collection("contacts").where("phone", "==", v);
+            if (tenantId) q = q.where("tenantId", "==", tenantId);
+            const snap = await q.limit(1).get();
+            if (!snap.empty) {
+              const d = snap.docs[0].data() || {};
+              const firstName = String(d.name || "").trim().split(/\s+/)[0] || "";
+              if (firstName) namePart = `, *${firstName}*`;
+              condoPart = String(d.condominium || "");
+              blockPart = String(d.block || "");
+              unitPart = String(d.unit || "");
+              break;
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
       const condoBold = condoPart ? `*${condoPart.toUpperCase()}*` : "*seu condomínio*";
       const unitLabel = unitPart ? `${unitPart}` : "—";
       const blockLabel = blockPart ? `${blockPart}` : "—";
