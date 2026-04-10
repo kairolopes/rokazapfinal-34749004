@@ -73,7 +73,6 @@ const defaultSchedule: Schedule = {
 const defaultConfig: ChatbotConfig = {
   enabled: false,
   systemPrompt: 'Você é o assistente virtual do Síndico X. Responda de forma educada e objetiva. Se não souber a resposta, informe que um atendente entrará em contato no próximo horário de funcionamento.',
-  systemPrompt: 'Você é o assistente virtual do Síndico X. Responda de forma educada e objetiva. Se não souber a resposta, informe que um atendente entrará em contato no próximo horário de funcionamento.',
   absenceMessage: '👋 Olá! No momento estamos fora do horário de atendimento. O Síndico X estará disponível no próximo dia útil. Se precisar, deixe sua mensagem que responderemos assim que possível!',
   replyMode: 'always',
   schedule: defaultSchedule,
