@@ -1376,6 +1376,9 @@ async function handleChatbotAutoReply(
   } catch {}
 
   const tryFindContact = async (): Promise<{ doc: FirebaseFirestore.DocumentSnapshot | null, data: any | null }> => {
+    // Check cache first
+    const cached = getCachedContact(phone, tenantId);
+    if (cached) return { doc: null, data: cached };
     const digitsOnly = (s: string) => (s || "").replace(/\D+/g, "");
     const variants = (() => {
       const d = digitsOnly(phone);
