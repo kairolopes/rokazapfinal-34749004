@@ -1415,6 +1415,7 @@ async function handleChatbotAutoReply(
       } else {
         // Search in Superlógica by last 5 digits of phone
         const last5 = phone.replace(/\D/g, "").slice(-5);
+        console.log(`[IDENT] phone=${phone}, last5=${last5}`);
         if (!last5) {
           replyText = "Não consegui identificar seu cadastro. Entre em contato com a administração para se cadastrar.";
         } else {
@@ -1428,9 +1429,16 @@ async function handleChatbotAutoReply(
             let foundMatch: { name: string; unitId: string; block: string } | null = null;
             for (let pg = 1; pg <= 5 && !foundMatch; pg++) {
               const slUrl = `${SUPERLOGICA_BASE_URL}/unidades/index?idCondominio=47&exibirGruposDasUnidades=1&itensPorPagina=50&pagina=${pg}&exibirDadosDosContatos=1`;
+              console.log(`[IDENT] Fetching page ${pg}: ${slUrl}`);
               const slResp = await fetch(slUrl, { method: "GET", headers: slHeaders });
-              if (!slResp.ok) break;
+              console.log(`[IDENT] Page ${pg} status: ${slResp.status}`);
+              if (!slResp.ok) {
+                const errBody = await slResp.text();
+                console.error(`[IDENT] API error page ${pg}: ${errBody}`);
+                break;
+              }
               const slUnits: any[] = await slResp.json();
+              console.log(`[IDENT] Page ${pg} returned ${Array.isArray(slUnits) ? slUnits.length : 'non-array'} units`);
               if (!Array.isArray(slUnits) || slUnits.length === 0) break;
               for (const slUnit of slUnits) {
                 const phoneFields: string[] = [];
@@ -1447,6 +1455,7 @@ async function handleChatbotAutoReply(
                   return digs.length >= 5 && digs.slice(-5) === last5;
                 });
                 if (matched) {
+                  console.log(`[IDENT] MATCH found! unit=${slUnit.id_unidade_uni}, block=${slUnit.st_bloco_uni}, phoneFields=${JSON.stringify(phoneFields)}`);
                   foundMatch = {
                     name: contatos.length > 0 ? (contatos[0].st_nome_con || "") : "",
                     unitId: String(slUnit.id_unidade_uni || ""),
