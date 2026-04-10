@@ -231,7 +231,7 @@ async function findInSuperlogica(phone: string, tenantId?: string): Promise<Supe
 
 // ── Webhook principal ────────────────────────────────────────────────
 
-export const zapiWebhook = functions.https.onRequest(async (req, res) => {
+export const zapiWebhook = functions.runWith({ timeoutSeconds: 300, memory: "1GB" }).https.onRequest(async (req, res) => {
   // CORS (permite chamadas GET/POST do app/preview)
   if (req.method === "OPTIONS") {
     res.set("Access-Control-Allow-Origin", "*");
