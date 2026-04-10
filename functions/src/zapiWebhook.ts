@@ -1425,12 +1425,17 @@ async function handleChatbotAutoReply(
         setCachedContact(phone, tenantId, snap.docs[0].data()); return { doc: snap.docs[0], data: snap.docs[0].data() };
       }
     }
+    // Passo 2: sem tenantId, ainda preferindo CPF quando houver
+    for (const v of variants) {
+      const snap = await db.collection("contacts").where("phone", "==", v).limit(10).get();
+      if (!snap.empty) {
+        const withCpf = snap.docs.find(d => {
           const c = d.data() || {};
           const cpf = String(c.cpf || "").replace(/\D+/g, "");
           return cpf.length >= 11;
         });
-        if (withCpf) return { doc: withCpf, data: withCpf.data() };
-        return { doc: snap.docs[0], data: snap.docs[0].data() };
+        if (withCpf) { setCachedContact(phone, tenantId, withCpf.data()); return { doc: withCpf, data: withCpf.data() }; }
+        setCachedContact(phone, tenantId, snap.docs[0].data()); return { doc: snap.docs[0], data: snap.docs[0].data() };
       }
     }
     return { doc: null, data: null };
