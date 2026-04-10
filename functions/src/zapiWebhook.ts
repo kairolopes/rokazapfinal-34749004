@@ -2724,7 +2724,7 @@ async function handleChatbotAutoReply(
         console.log("zapiWebhook - chamando Gemini via Edge Function com", messages.length, "mensagens de contexto");
 
         const SUPABASE_EDGE_URL = functions.config()?.supabase?.url || "https://udujaojjkuapogypagxm.supabase.co";
-        const SUPABASE_ANON_KEY = functions.config()?.supabase?.anon_key || "";
+        const SUPABASE_ANON_KEY = functions.config()?.supabase?.anon_key || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVkdWphb2pqa3VhcG9neXBhZ3htIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2OTE3NjYsImV4cCI6MjA4ODI2Nzc2Nn0.xdxw4FHBIihnpEdAKEktV2mPx3KRISv6VQ6b38K5ytI";
         const aiResp = await fetch(`${SUPABASE_EDGE_URL}/functions/v1/ai-chat`, {
           method: "POST",
           headers: {
