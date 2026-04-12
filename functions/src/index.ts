@@ -38,3 +38,4 @@ export { setupAmoCondominioConfig } from "./setupAmoConfig";
 export { indexTenantPdf, askCondoDoc } from "./pdfIngest";
 export { httpBoletoSearch } from "./httpBoletoSearch";
 export { setupZapiConfig } from "./setupZapiConfig";
+export { resetConversations } from "./resetConversations";
