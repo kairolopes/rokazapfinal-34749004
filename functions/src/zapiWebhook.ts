@@ -1384,8 +1384,8 @@ async function handleChatbotAutoReply(
     if (identStatus === 2) {
       if (identPendingConfirm) {
         // Awaiting "sim" / "não" confirmation
-        const yesPattern = /^(sim|s|yes|y|isso|confirmo|correto|exato)\b/i;
-        const noPattern = /^(n[aã]o|no|n|errado|incorreto)\b/i;
+        const yesPattern = /^(sim|s|yes|y|isso|confirmo|correto|exato|é isso|sou eu|tá certo|ta certo|pode ser|é isso aí|isso mesmo|isso ai|certinho|certo|aham|uhum|positivo|com certeza|claro|ok|blz|beleza|bora|vamos|é esse|é essa|meu mesmo|minha mesmo|esse mesmo|essa mesma|perfeito|show)\b/i;
+        const noPattern = /^(n[aã]o|no|n|errado|incorreto|nao é|não é|tá errado|ta errado|errei|engano|outro|outra|nope|negativo|nem|nunca|de jeito nenhum|não sou|nao sou)\b/i;
         if (yesPattern.test(incomingMessage.trim())) {
           await db.collection("conversations").doc(conversationId).update({
             identStatus: 1,
@@ -1395,12 +1395,8 @@ async function handleChatbotAutoReply(
           const identUnit = convData?.identUnitId || "—";
           const identBlk = convData?.identBlock || "—";
           replyText =
-            `Olá, *${firstName}*, sua conta está vinculada ao apartamento ${identUnit}, bloco ${identBlk}, do *CONDOMÍNIO CAMPOS ALTOS*!\n\n` +
-            `Como posso te ajudar hoje?\n\n` +
-            `1 - Boletos a pagar;\n` +
-            `2 - Reserva de Ambientes;\n` +
-            `3 - Dúvidas sobre a Convenção e Regimento Interno;\n` +
-            `4 - Falar com a Administração;`;
+            `Que bom, *${firstName}*! Sua conta está vinculada ao apartamento ${identUnit}, bloco ${identBlk}, do *Condomínio Campos Altos* ✅\n\n` +
+            `Como posso te ajudar hoje? 😊`;
         } else if (noPattern.test(incomingMessage.trim())) {
           await db.collection("conversations").doc(conversationId).update({
             identPendingConfirm: false,
@@ -1410,7 +1406,12 @@ async function handleChatbotAutoReply(
           });
           replyText = "Não consegui identificar seu cadastro. Por favor, entre em contato com a administração para se cadastrar.";
         } else {
-          replyText = "Por favor, responda *sim* ou *não* para confirmar sua identificação.";
+          const identBlk = convData?.identBlock || "—";
+          const identUnit = convData?.identUnitId || "—";
+          replyText =
+            `Desculpa, não entendi 😅\n\n` +
+            `Só preciso confirmar: você mora no *Bloco ${identBlk}*, *Apartamento ${identUnit}*?\n\n` +
+            `Pode responder *sim* ou *não* 😊`;
         }
       } else {
         // Capture WhatsApp display name
