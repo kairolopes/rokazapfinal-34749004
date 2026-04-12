@@ -42,6 +42,23 @@ export default function Settings() {
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#22c55e');
   const [cleaning, setCleaning] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  const handleResetConversations = async () => {
+    setResetting(true);
+    try {
+      if (!app) throw new Error('Firebase não configurado');
+      const fns = getFunctions(app, 'us-central1');
+      const resetFn = httpsCallable<any, { success: boolean; resetCount: number; messagesDeleted: number }>(fns, 'resetConversations');
+      const result = await resetFn({});
+      const d = result.data;
+      toast({ title: 'Conversas resetadas!', description: `${d.resetCount} conversas resetadas, ${d.messagesDeleted} mensagens removidas` });
+    } catch (err: any) {
+      toast({ title: 'Erro ao resetar', description: err?.message || 'Falha', variant: 'destructive' });
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleCleanInternalIds = async () => {
     setCleaning(true);
@@ -267,18 +284,33 @@ export default function Settings() {
           <CardHeader>
             <CardTitle className="text-lg text-destructive">Manutenção</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground mb-3">
-              Remove conversas e contatos com IDs internos do WhatsApp (@lid, @newsletter, @g.us) como "Central Lopes".
-            </p>
-            <Button
-              variant="destructive"
-              onClick={handleCleanInternalIds}
-              disabled={cleaning}
-            >
-              {cleaning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {cleaning ? 'Limpando...' : 'Limpar IDs internos'}
-            </Button>
+          <CardContent className="space-y-4">
+            <div>
+              <p className="text-sm text-muted-foreground mb-3">
+                Reseta todas as conversas do tenant, limpando identificação e mensagens. Todos os clientes reiniciarão o fluxo.
+              </p>
+              <Button
+                variant="destructive"
+                onClick={handleResetConversations}
+                disabled={resetting}
+              >
+                {resetting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {resetting ? 'Resetando...' : 'Resetar Conversas'}
+              </Button>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground mb-3">
+                Remove conversas e contatos com IDs internos do WhatsApp (@lid, @newsletter, @g.us).
+              </p>
+              <Button
+                variant="destructive"
+                onClick={handleCleanInternalIds}
+                disabled={cleaning}
+              >
+                {cleaning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {cleaning ? 'Limpando...' : 'Limpar IDs internos'}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
