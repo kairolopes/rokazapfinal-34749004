@@ -2470,15 +2470,7 @@ async function handleChatbotAutoReply(
       } catch {}
       return header;
     }
-    if (/^2\b/.test(lower) || lower.includes("reserva")) {
-      return "Para reserva de ambientes, me informe: espaço desejado, data e horário. Em seguida confirmo disponibilidade.";
-    }
-    if (/^3\b/.test(lower) || lower.includes("conven") || lower.includes("regimento")) {
-      return "Posso te ajudar com a Convenção e o Regimento Interno. Me diga sua dúvida e verifico o item correspondente. Se preferir, encaminho um resumo dos principais tópicos.";
-    }
-    if (/^4\b/.test(lower) || lower.includes("admin")) {
-      return "Certo, vou solicitar que a administração entre em contato com você em breve. Deseja adicionar um breve resumo do assunto?";
-    }
+    // Opções 2, 3 e 4 agora são tratadas pela IA conversacional
     return null;
   };
 
@@ -2486,51 +2478,7 @@ async function handleChatbotAutoReply(
   if (menuReply) {
     replyText = menuReply;
   }
-  if (!replyText) {
-    const greetLike = /^(oi|olá|ola|bom dia|boa tarde|boa noite|menu)\b/i.test(incomingMessage || "");
-    if (greetLike) {
-      let namePart = "";
-      let condoPart = "";
-      let unitPart = "";
-      let blockPart = "";
-      // For Campos Altos identified users, use stored ident data
-      if (tenantId === IDENT_TENANT && convData?.identStatus === 1) {
-        const firstName = (convData?.identName || "").split(/\s+/)[0] || "";
-        if (firstName) namePart = `, *${firstName}*`;
-        condoPart = "CONDOMÍNIO CAMPOS ALTOS";
-        blockPart = convData?.identBlock || "—";
-        unitPart = convData?.identUnitId || "—";
-      } else {
-        try {
-          const variants = brVariants(phone);
-          for (const v of variants.slice(0, 10)) {
-            let q: FirebaseFirestore.Query = db.collection("contacts").where("phone", "==", v);
-            if (tenantId) q = q.where("tenantId", "==", tenantId);
-            const snap = await q.limit(1).get();
-            if (!snap.empty) {
-              const d = snap.docs[0].data() || {};
-              const firstName = String(d.name || "").trim().split(/\s+/)[0] || "";
-              if (firstName) namePart = `, *${firstName}*`;
-              condoPart = String(d.condominium || "");
-              blockPart = String(d.block || "");
-              unitPart = String(d.unit || "");
-              break;
-            }
-          }
-        } catch {}
-      }
-      const condoBold = condoPart ? `*${condoPart.toUpperCase()}*` : "*seu condomínio*";
-      const unitLabel = unitPart ? `${unitPart}` : "—";
-      const blockLabel = blockPart ? `${blockPart}` : "—";
-      replyText =
-        `Olá${namePart}, sua conta está vinculada ao apartamento ${unitLabel}, bloco ${blockLabel}, do ${condoBold}!\n\n` +
-        `Como posso te ajudar hoje?\n\n` +
-        `1 - Boletos a pagar;\n` +
-        `2 - Reserva de Ambientes;\n` +
-        `3 - Dúvidas sobre a Convenção e Regimento Interno;\n` +
-        `4 - Falar com a Administração;`;
-    }
-  }
+  // Saudações agora passam direto para a IA conversacional (sem menu hardcoded)
 
   // 5. Provedores de IA (Gemini via Edge Function ai-chat)
   // 5a. Provider Dialogflow CX (Google) — mantido como fallback legado
@@ -2825,12 +2773,50 @@ async function handleChatbotAutoReply(
       }
       const basePrompt = config.systemPrompt || "Você é um assistente virtual.";
       const systemContent = contactContext ? `${basePrompt}\n\nContexto do contato: ${contactContext}` : basePrompt;
+
+      // Dados do morador para contexto conversacional
+      const identName = convData?.identWhatsappName || convData?.identName || "";
+      const identBlock = convData?.identBlock || "";
+      const identUnit = convData?.identUnitId || "";
+      const identCondo = convData?.identCondoName || "seu condomínio";
+      const moradorFirstName = identName.split(/\s+/)[0] || "";
+
+      const conversationalPrompt = `${systemContent}
+
+Você é o *Síndico X*, assistente virtual do condomínio${identCondo ? ` *${identCondo.toUpperCase()}*` : ""}.
+Sua personalidade: acolhedor, empático, prestativo — como um concierge dedicado que conhece cada morador.
+
+${moradorFirstName ? `O morador que está falando com você se chama *${moradorFirstName}*${identBlock ? `, mora no Bloco ${identBlock}` : ""}${identUnit ? `, Apt ${identUnit}` : ""}.` : ""}
+
+REGRAS DE INTERAÇÃO:
+- Cumprimente de forma calorosa e natural, usando o nome do morador quando disponível
+- *NÃO* despeje menu numerado logo de cara — pergunte como pode ajudar de forma genuína
+- Use um funil natural: saudar → perguntar como pode ajudar → entender a necessidade → direcionar
+- Seja flexível: aceite linguagem coloquial, gírias, abreviações, áudios transcritos
+- Quando o morador disser o que precisa, ajude diretamente sem rodeios
+- Só apresente opções numeradas se o morador pedir "menu" ou se houver múltiplas alternativas claras
+- Mantenha respostas curtas e naturais, como uma conversa real de WhatsApp (2-4 linhas no máximo)
+- Use emojis com moderação (1-2 por mensagem, no máximo)
+- Nunca repita informações que já foram ditas na conversa
+
+CAPACIDADES:
+- 📄 Boletos/cobranças — quando o morador pedir boleto, diga que vai buscar e peça para aguardar
+- 🏊 Reserva de ambientes — pergunte: qual espaço, data e horário
+- 📋 Convenção e Regimento Interno — tire dúvidas ou ofereça resumo dos principais tópicos
+- 📞 Falar com a administração — ofereça encaminhar, pergunte sobre o assunto brevemente
+
+FORMATAÇÃO WhatsApp:
+- Use *negrito* para destaques importantes
+- Use quebras de linha para separar assuntos
+- Não use o caractere '|'
+- Não inclua linha de "CPF identificado"`;
+
       const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = replyText
         ? []
         : [
             {
               role: "system",
-              content: `${systemContent}\n\nFormate as respostas para WhatsApp de forma clara e visual, sem usar o caractere '|'. Use:\n- Títulos em *negrito*\n- Emojis contextuais (ex.: 🧾, 🏢, 📅, ➜)\n- Listas com marcadores '•'\n- Setas '➜' para ações/links\n- Quebras de linha entre itens\n\nAo receber saudações ou 'menu', responda exatamente neste formato:\nOlá, *{nome}*, sua conta está vinculada ao apartamento {unidade}, bloco {bloco}, do *{CONDOMÍNIO}*!\n\nComo posso te ajudar hoje?\n\n1 - Boletos a pagar;\n2 - Reserva de Ambientes;\n3 - Dúvidas sobre a Convenção e Regimento Interno;\n4 - Falar com a Administração;\n\nPara demais mensagens, seja conciso e mantenha a formatação acima quando fizer sentido. Não inclua linha de \"CPF identificado\".`,
+              content: conversationalPrompt,
             },
           ];
 
@@ -2872,18 +2858,18 @@ async function handleChatbotAutoReply(
     } catch (aiErr: any) {
       console.error("zapiWebhook - erro Gemini:", aiErr?.message || aiErr);
       const menu = await maybeHandleMenu();
-      replyText = menu || "Como posso te ajudar hoje?\n\n1 - Boletos a pagar;\n2 - Reserva de Ambientes;\n3 - Dúvidas sobre a Convenção e Regimento Interno;\n4 - Falar com a Administração;";
+      replyText = menu || "Desculpe, tive um probleminha aqui 😅 Pode repetir o que precisa?";
     }
   } else {
     if (!replyText) {
       const menu = await maybeHandleMenu();
-      replyText = menu || "Como posso te ajudar hoje?\n\n1 - Boletos a pagar;\n2 - Reserva de Ambientes;\n3 - Dúvidas sobre a Convenção e Regimento Interno;\n4 - Falar com a Administração;";
+      replyText = menu || "Oi! Como posso te ajudar? 😊";
     }
   }
 
   if (!replyText) {
     const menu = await maybeHandleMenu();
-    replyText = menu || "Como posso te ajudar hoje?\n\n1 - Boletos a pagar;\n2 - Reserva de Ambientes;\n3 - Dúvidas sobre a Convenção e Regimento Interno;\n4 - Falar com a Administração;";
+    replyText = menu || "Oi! Como posso te ajudar? 😊";
   }
 
   // 7. Enviar via Z-API
