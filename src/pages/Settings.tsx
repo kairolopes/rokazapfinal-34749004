@@ -42,6 +42,23 @@ export default function Settings() {
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#22c55e');
   const [cleaning, setCleaning] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  const handleResetConversations = async () => {
+    setResetting(true);
+    try {
+      if (!app) throw new Error('Firebase não configurado');
+      const fns = getFunctions(app, 'us-central1');
+      const resetFn = httpsCallable<any, { success: boolean; resetCount: number; messagesDeleted: number }>(fns, 'resetConversations');
+      const result = await resetFn({});
+      const d = result.data;
+      toast({ title: 'Conversas resetadas!', description: `${d.resetCount} conversas resetadas, ${d.messagesDeleted} mensagens removidas` });
+    } catch (err: any) {
+      toast({ title: 'Erro ao resetar', description: err?.message || 'Falha', variant: 'destructive' });
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleCleanInternalIds = async () => {
     setCleaning(true);
