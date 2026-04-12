@@ -471,7 +471,25 @@ export const zapiWebhook = functions.runWith({ timeoutSeconds: 300, memory: "1GB
     // Buscar ownerId e tenantId a partir do instanceId
     let ownerId = "";
     let tenantId = "";
-    
+    let mappedConversationId = "";
+    let mappedMessageDocId = "";
+    let existingConversationSnapshot: any = null;
+
+    // Para mensagens enviadas pela plataforma, reaproveitar o mapeamento salvo no envio
+    if (fromMe && zapiMessageId) {
+      const encodedId = encodeURIComponent(zapiMessageId);
+      const mapDoc = await db.collection("zapi_message_map").doc(encodedId).get();
+      if (mapDoc.exists) {
+        const mapData = mapDoc.data() || {};
+        mappedConversationId = String(mapData.conversationId || "");
+        mappedMessageDocId = String(mapData.messageDocId || "");
+        console.log("zapiWebhook - mapeamento direto encontrado:", {
+          zapiMessageId,
+          mappedConversationId,
+          mappedMessageDocId,
+        });
+      }
+    }
 
     if (instanceId) {
       const configSnapshot = await db.collection("zapi_config")
@@ -486,6 +504,26 @@ export const zapiWebhook = functions.runWith({ timeoutSeconds: 300, memory: "1GB
         ownerId = ownerFromConfig;
         tenantId = String(configData.tenantId || "");
         console.log("zapiWebhook - ownerId encontrado por instanceId:", ownerId || "(vazio)", "tenantId:", tenantId, "docId:", configDoc.id);
+      }
+    }
+
+    if (mappedConversationId) {
+      const mappedConvDoc = await db.collection("conversations").doc(mappedConversationId).get();
+      if (mappedConvDoc.exists) {
+        existingConversationSnapshot = mappedConvDoc;
+        const mappedConvData = mappedConvDoc.data() || {};
+        if (!tenantId && mappedConvData.tenantId) {
+          tenantId = String(mappedConvData.tenantId || "");
+        }
+        const participants: string[] = Array.isArray(mappedConvData.participants) ? mappedConvData.participants : [];
+        const candidateOwner = participants.find((p) => p && p !== phone);
+        if (!ownerId && candidateOwner) {
+          ownerId = candidateOwner;
+        }
+        console.log("zapiWebhook - conversa resolvida pelo mapa:", mappedConversationId, "tenantId:", tenantId, "ownerId:", ownerId || "(vazio)");
+      } else {
+        mappedConversationId = "";
+        mappedMessageDocId = "";
       }
     }
 
@@ -516,44 +554,67 @@ export const zapiWebhook = functions.runWith({ timeoutSeconds: 300, memory: "1GB
       return;
     }
 
-    // Buscar ou criar conversa (filtrar por tenantId se disponível)
-    const convQueryBase = db.collection("conversations").where("contactPhone", "==", phone);
-    const convsSnapshot = tenantId
-      ? await convQueryBase.where("tenantId", "==", tenantId).limit(1).get()
-      : await convQueryBase.limit(1).get();
-
+    // Buscar ou criar conversa priorizando mapa direto e conversa já existente por telefone
     let conversationId: string;
-    const isNewConversation = convsSnapshot.empty;
+    let isNewConversation = false;
 
-    if (!convsSnapshot.empty) {
-      const convDoc = convsSnapshot.docs[0];
-      conversationId = convDoc.id;
-      const participants: string[] = convDoc.data().participants || [];
-      if (!participants.includes(ownerId)) {
+    if (mappedConversationId) {
+      conversationId = mappedConversationId;
+    } else {
+      const convsByPhone = await db.collection("conversations")
+        .where("contactPhone", "==", phone)
+        .limit(10)
+        .get();
+
+      const matchedConv = convsByPhone.docs.find((doc) => {
+        const data = doc.data() || {};
+        return tenantId && String(data.tenantId || "") === tenantId;
+      }) || convsByPhone.docs.find((doc) => {
+        const data = doc.data() || {};
+        const participants: string[] = Array.isArray(data.participants) ? data.participants : [];
+        return ownerId ? participants.includes(ownerId) : true;
+      }) || null;
+
+      if (matchedConv) {
+        conversationId = matchedConv.id;
+        existingConversationSnapshot = matchedConv;
+        const matchedData = matchedConv.data() || {};
+        if (!tenantId && matchedData.tenantId) {
+          tenantId = String(matchedData.tenantId || "");
+        }
+      } else {
+        const senderName = body.senderName || body.chatName || phone;
+        const newConvData: any = {
+          participants: [ownerId, phone],
+          contactId: phone,
+          contactName: senderName,
+          contactPhone: phone,
+          contactAvatar: body.photo || "",
+          contactIsOnline: true,
+          contactStatus: "",
+          unreadCount: fromMe ? 0 : 1,
+          isPinned: false,
+          isFavorite: false,
+          isMuted: false,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (tenantId) newConvData.tenantId = tenantId;
+        const newConv = await db.collection("conversations").add(newConvData);
+        conversationId = newConv.id;
+        isNewConversation = true;
+      }
+    }
+
+    if (existingConversationSnapshot?.exists) {
+      const participants: string[] = Array.isArray(existingConversationSnapshot.data()?.participants)
+        ? existingConversationSnapshot.data().participants
+        : [];
+      if (ownerId && !participants.includes(ownerId)) {
         await db.collection("conversations").doc(conversationId).update({
           participants: admin.firestore.FieldValue.arrayUnion(ownerId),
         });
       }
-    } else {
-      const senderName = body.senderName || body.chatName || phone;
-      const newConvData: any = {
-        participants: [ownerId, phone],
-        contactId: phone,
-        contactName: senderName,
-        contactPhone: phone,
-        contactAvatar: body.photo || "",
-        contactIsOnline: true,
-        contactStatus: "",
-        unreadCount: fromMe ? 0 : 1,
-        isPinned: false,
-        isFavorite: false,
-        isMuted: false,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-      if (tenantId) newConvData.tenantId = tenantId;
-      const newConv = await db.collection("conversations").add(newConvData);
-      conversationId = newConv.id;
     }
 
     // Detectar tipo e gravar mensagem (FASE 1 — síncrona, rápida)
@@ -585,16 +646,59 @@ export const zapiWebhook = functions.runWith({ timeoutSeconds: 300, memory: "1GB
       messageData.longitude = body.location.longitude;
     }
 
-    await db.collection("conversations").doc(conversationId).collection("messages").add(messageData);
+    const messagesRef = db.collection("conversations").doc(conversationId).collection("messages");
+    if (mappedMessageDocId) {
+      const mappedMsgRef = messagesRef.doc(mappedMessageDocId);
+      const mappedMsgSnap = await mappedMsgRef.get();
 
-    // Atualizar conversa
+      if (mappedMsgSnap.exists) {
+        const messagePatch: any = {
+          from: fromMe ? "me" : phone,
+          to: fromMe ? phone : "me",
+          status: fromMe ? "sent" : "received",
+          isFromMe: fromMe,
+        };
+
+        if (zapiMessageId) messagePatch.zapiMessageId = zapiMessageId;
+        if (messageBody) messagePatch.body = messageBody;
+        if (type) messagePatch.type = type;
+        if (mediaUrl) messagePatch.mediaUrl = mediaUrl;
+        if (mediaMimeType) messagePatch.mediaMimeType = mediaMimeType;
+        if (mediaFileName) messagePatch.mediaFileName = mediaFileName;
+        if (body.document?.fileSize) messagePatch.mediaFileSize = body.document.fileSize;
+        if (linkUrl) messagePatch.linkUrl = linkUrl;
+        if (linkTitle) messagePatch.linkTitle = linkTitle;
+        if (linkDescription) messagePatch.linkDescription = linkDescription;
+        if (linkImage) messagePatch.linkImage = linkImage;
+        if (body.location) {
+          messagePatch.latitude = body.location.latitude;
+          messagePatch.longitude = body.location.longitude;
+        }
+
+        await mappedMsgRef.set(messagePatch, { merge: true });
+      } else {
+        await mappedMsgRef.set(messageData);
+      }
+    } else {
+      await messagesRef.add(messageData);
+    }
+
+    // Atualizar conversa sem apagar texto existente quando o callback volta sem body
     const conversationUpdate: any = {
-      lastMessageBody: messageBody,
       lastMessageTimestamp: admin.firestore.FieldValue.serverTimestamp(),
       lastMessageStatus: fromMe ? "sent" : "received",
       lastMessageIsFromMe: fromMe,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
+
+    if (messageBody) {
+      conversationUpdate.lastMessageBody = messageBody;
+    } else {
+      const previousLastBody = String(existingConversationSnapshot?.data?.()?.lastMessageBody || "").trim();
+      if (previousLastBody) {
+        conversationUpdate.lastMessageBody = previousLastBody;
+      }
+    }
 
     if (!fromMe) {
       conversationUpdate.unreadCount = admin.firestore.FieldValue.increment(1);
