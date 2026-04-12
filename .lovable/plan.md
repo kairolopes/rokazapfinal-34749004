@@ -1,39 +1,36 @@
 
 
-## Plano: Corrigir tokens da Superlógica na identificação
+## Plano: Usar nome do WhatsApp na identificação
 
 ### Problema
-O fluxo de identificação usa `getSuperlogicaConfig(tenantId)` que pode estar retornando o `access_token` errado. O token correto para o Campos Altos é:
-- **app_token**: `46cee13a-6807-4676-a287-7c474c3f128a`
-- **access_token**: `76dd967a-7c05-419f-9260-9820cdc47f03`
+O bot está chamando o cliente pelo nome cadastrado na Superlógica (ex: nome do proprietário/morador), mas deveria usar o nome que aparece no WhatsApp do cliente (`body.senderName`).
 
-### Solução
-Hardcodar os tokens corretos diretamente no bloco de identificação (`identStatus === 2`) em `functions/src/zapiWebhook.ts`, em vez de depender do `getSuperlogicaConfig` que pode resolver credenciais erradas.
-
-### Alteração
+### Alterações
 
 | Arquivo | Ação |
 |---------|------|
-| `functions/src/zapiWebhook.ts` | Substituir `getSuperlogicaConfig(tenantId)` no bloco de identificação por tokens fixos |
+| `functions/src/zapiWebhook.ts` | 3 pontos de alteração no bloco de identificação |
 
-Linhas ~1423-1428: trocar de:
+**1. Capturar o nome do WhatsApp (antes da busca, ~linha 1416)**
 ```typescript
-const cfg = await getSuperlogicaConfig(tenantId);
-const slHeaders = {
-  "Content-Type": "application/json",
-  app_token: cfg.appToken,
-  access_token: cfg.accessToken,
-};
+const whatsappName = body.senderName || body.chatName || "";
 ```
 
-Para:
+**2. Salvar o nome do WhatsApp na conversa ao encontrar match (~linha 1469-1474)**
+Adicionar `identWhatsappName: whatsappName` ao update do Firestore.
+
+**3. Usar o nome do WhatsApp na mensagem de confirmação (~linha 1475-1478)**
+Trocar `foundMatch.name` por `whatsappName || "morador"` na saudação.
+
+**4. Usar o nome do WhatsApp no menu pós-confirmação (~linha 1394)**
+Trocar:
 ```typescript
-const slHeaders = {
-  "Content-Type": "application/json",
-  app_token: "46cee13a-6807-4676-a287-7c474c3f128a",
-  access_token: "76dd967a-7c05-419f-9260-9820cdc47f03",
-};
+const firstName = (convData?.identName || "").split(/\s+/)[0] || "";
+```
+Por:
+```typescript
+const firstName = (convData?.identWhatsappName || convData?.identName || "").split(/\s+/)[0] || "";
 ```
 
-Após a alteração, será necessário fazer deploy: `cd functions && npm run build && firebase deploy --only functions:zapiWebhook`
+Isso garante que o bot sempre chame o cliente pelo nome que ele usa no WhatsApp, não pelo nome cadastrado na Superlógica.
 
