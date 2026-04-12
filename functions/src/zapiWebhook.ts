@@ -1391,7 +1391,7 @@ async function handleChatbotAutoReply(
             identStatus: 1,
             identPendingConfirm: false,
           });
-          const firstName = (convData?.identName || "").split(/\s+/)[0] || "";
+          const firstName = (convData?.identWhatsappName || convData?.identName || "").split(/\s+/)[0] || "";
           const identUnit = convData?.identUnitId || "—";
           const identBlk = convData?.identBlock || "—";
           replyText =
@@ -1413,6 +1413,8 @@ async function handleChatbotAutoReply(
           replyText = "Por favor, responda *sim* ou *não* para confirmar sua identificação.";
         }
       } else {
+        // Capture WhatsApp display name
+        const whatsappName = body.senderName || body.chatName || "";
         // Search in Superlógica by last 5 digits of phone
         const last5 = phone.replace(/\D/g, "").slice(-5);
         console.log(`[IDENT] phone=${phone}, last5=${last5}`);
@@ -1469,12 +1471,13 @@ async function handleChatbotAutoReply(
               await db.collection("conversations").doc(conversationId).update({
                 identPendingConfirm: true,
                 identName: foundMatch.name,
+                identWhatsappName: whatsappName,
                 identUnitId: foundMatch.unitId,
                 identBlock: foundMatch.block,
               });
               replyText =
                 `Olá! Sou o *Síndico X* do *Condomínio Campos Altos*.\n\n` +
-                `Seu nome é *${foundMatch.name || "morador"}*? Você está vinculado ao *Bloco ${foundMatch.block}*, *Apartamento ${foundMatch.unitId}*?\n\n` +
+                `Seu nome é *${whatsappName || "morador"}*? Você está vinculado ao *Bloco ${foundMatch.block}*, *Apartamento ${foundMatch.unitId}*?\n\n` +
                 `Responda *sim* ou *não*.`;
             } else {
               replyText = "Não consegui identificar seu cadastro. Por favor, entre em contato com a administração para se cadastrar.";
