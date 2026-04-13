@@ -408,18 +408,14 @@ export async function deleteChatViaZApi(phone: string): Promise<{ success: boole
   return result.data;
 }
 
-// Block/unblock contact
+// Delete Z-API config
 
-export async function blockContactViaZApi(
-  phone: string,
-  action: 'block' | 'unblock',
-  tenantId?: string
-): Promise<unknown> {
+export async function deleteZapiConfig(tenantId?: string): Promise<{ success: boolean; message: string }> {
   if (!functions) throw new Error('Firebase não configurado');
   const callable = httpsCallable<
-    { phone: string; action: string; tenantId?: string },
-    unknown
-  >(functions, 'blockContact');
-  const result = await callable({ phone, action, tenantId });
+    { tenantId?: string },
+    { success: boolean; message: string }
+  >(functions, 'deleteZapiConfig');
+  const result = await callable({ tenantId });
   return result.data;
 }
